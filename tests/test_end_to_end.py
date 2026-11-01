@@ -38,6 +38,15 @@ def test_env_baseline(built):
     ]
 
 
+def test_env_image_keeps_no_scratch_or_caches(built):
+    from gauntlet_sandbox import Sandbox, SandboxConfig
+
+    env, _, _ = built
+    with Sandbox(SandboxConfig(image=env.image), record=False) as sb:
+        res = sb.exec("ls -d /tmp/gauntlet-* /root/.cache 2>/dev/null | wc -l")
+    assert res.stdout.strip() == "0"
+
+
 def test_mined_tasks(built):
     _, tasks, _ = built
     by_title = {t.problem_statement.splitlines()[0]: t for t in tasks}

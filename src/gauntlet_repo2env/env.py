@@ -62,6 +62,7 @@ def build_env(
     apt_packages: tuple[str, ...] = ("git",),
     install_timeout: float = 1800,
     test_timeout: float = 1800,
+    baseline_tests: bool = True,
     cache_dir: Path | None = None,
     log: Log = lambda _: None,
 ) -> EnvSpec:
@@ -103,9 +104,16 @@ def build_env(
         if not res.ok:
             raise BuildFailed(f"dependency install failed:\n{(res.stdout + res.stderr)[-3000:]}")
 
-        log("running the test suite once for a baseline")
-        baseline = run_tests(sb, WORKDIR, timeout=test_timeout)
-        log(f"baseline: {baseline.summary()}")
+        if baseline_tests:
+            log("running the test suite once for a baseline")
+            baseline = run_tests(sb, WORKDIR, timeout=test_timeout)
+            log(f"baseline: {baseline.summary()}")
+        else:
+            baseline = TestReport()
+
+        # leave nothing behind that a later task sandbox could learn from: grader scratch
+        # files, pip and apt caches
+        sb.exec("rm -rf /tmp/gauntlet-* /root/.cache /var/lib/apt/lists/*")
 
         snap = sb.snapshot(label="env")
         image = sb.client.images.get(snap)

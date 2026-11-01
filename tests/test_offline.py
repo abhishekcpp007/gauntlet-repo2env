@@ -45,6 +45,7 @@ def test_detect_python(calc_repo, tmp_path):
     script = install_script(stack)
     assert "-e '.[test]'" in script
     assert script.rstrip().endswith("pytest")
+    assert all("--no-cache-dir" in line for line in script.splitlines() if "pip install" in line)
 
 
 def test_history(calc_repo, tmp_path):

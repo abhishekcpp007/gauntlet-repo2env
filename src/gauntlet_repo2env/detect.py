@@ -85,7 +85,8 @@ def detect(repo: Repo, sha: str) -> Stack:
 
 def install_script(stack: Stack) -> str:
     """Shell steps that get a Python repo's deps and pytest installed, run from the repo root."""
-    pip = "python -m pip install -q --disable-pip-version-check"
+    # no wheel cache: a cached build of the project could outlive the commit it came from
+    pip = "python -m pip install -q --disable-pip-version-check --no-cache-dir"
     lines = [
         "set -e",
         # git archive drops .git, so version-from-git plugins (setuptools-scm, hatch-vcs) need a hint
