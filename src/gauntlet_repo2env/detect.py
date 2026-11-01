@@ -31,6 +31,9 @@ class Stack(BaseModel):
     dependency_groups: list[str] = Field(default_factory=list)
     requirements: list[str] = Field(default_factory=list)
     requires_python: str | None = None
+    # the PEP 517 build backend, installed into the env so the project can be reinstalled
+    # offline later (a task sandbox at an older commit has to regenerate files like _version.py)
+    build_requires: list[str] = Field(default_factory=list)
 
 
 def _is_requirements(path: str) -> bool:
@@ -65,6 +68,9 @@ def detect(repo: Repo, sha: str) -> Stack:
         stack.dependency_groups = [g for g in data.get("dependency-groups", {}) if g in TEST_EXTRA_NAMES]
         # a pyproject with only tool config (ruff, black...) isn't an installable package
         stack.installable = "build-system" in data or "project" in data
+        requires = data.get("build-system", {}).get("requires")
+        if isinstance(requires, list):
+            stack.build_requires = [r for r in requires if isinstance(r, str)]
 
     if "setup.py" in root:
         stack.installable = True
@@ -80,6 +86,8 @@ def detect(repo: Repo, sha: str) -> Stack:
             pass
 
     stack.extras = sorted(e for e in extras if e in TEST_EXTRA_NAMES)
+    if stack.installable and not stack.build_requires:
+        stack.build_requires = ["setuptools>=40.8.0", "wheel"]  # pip's legacy default backend
     return stack
 
 
@@ -96,6 +104,8 @@ def install_script(stack: Stack) -> str:
     for req in stack.requirements:
         lines.append(f"{pip} -r {shlex.quote(req)}")
     if stack.installable:
+        if stack.build_requires:
+            lines.append(f"{pip} " + " ".join(shlex.quote(r) for r in stack.build_requires))
         target = f".[{','.join(stack.extras)}]" if stack.extras else "."
         lines.append(f"{pip} -e {shlex.quote(target)}")
     for group in stack.dependency_groups:

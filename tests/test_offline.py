@@ -44,6 +44,9 @@ def test_detect_python(calc_repo, tmp_path):
     assert stack.extras == ["test"]  # docs is ignored
     script = install_script(stack)
     assert "-e '.[test]'" in script
+    assert stack.build_requires == ["setuptools>=61"]
+    assert "pip install -q --disable-pip-version-check --no-cache-dir 'setuptools>=61'" in script
+    assert script.index("'setuptools>=61'") < script.index("-e '.[test]'")
     assert script.rstrip().endswith("pytest")
     assert all("--no-cache-dir" in line for line in script.splitlines() if "pip install" in line)
 
