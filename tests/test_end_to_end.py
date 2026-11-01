@@ -104,3 +104,48 @@ def test_non_python_repo_is_refused(tmp_path):
     _commit(repo, "init", {"package.json": "{}"})
     with pytest.raises(UnsupportedRepo, match="node"):
         build_env(str(repo), cache_dir=tmp_path / "cache")
+
+
+FORCE_PASS_CONFTEST = """\
+import pytest
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    outcome = yield
+    report = outcome.get_result()
+    report.outcome = "passed"
+    report.longrepr = None
+"""
+
+
+def _new_file_diff(path: str, body: str) -> str:
+    lines = body.splitlines()
+    added = "".join(f"+{ln}\n" for ln in lines)
+    head = f"diff --git a/{path} b/{path}\nnew file mode 100644\n--- /dev/null\n+++ b/{path}\n"
+    return f"{head}@@ -0,0 +1,{len(lines)} @@\n{added}"
+
+
+def test_conftest_hack_does_not_resolve(built):
+    # without patch guarding this exact hack scored resolved=True on the sub task
+    _, tasks, cache = built
+    task = next(t for t in tasks if t.problem_statement.startswith("Fix sub"))
+    res = evaluate(task, _new_file_diff("conftest.py", FORCE_PASS_CONFTEST), cache_dir=cache)
+    assert not res.resolved
+    assert res.ignored_files == ["conftest.py"]
+    assert res.fail_to_pass == {"tests/test_ops.py::test_sub": False}
+
+
+def test_test_edits_are_ignored_but_real_fix_still_counts(built):
+    _, tasks, cache = built
+    task = next(t for t in tasks if t.problem_statement.startswith("Add mul"))
+    with open_task(task, cache_dir=cache) as sb:
+        code = sb.read_text("calc/__init__.py")
+        sb.write_file("calc/__init__.py", code + "\n\ndef mul(a, b):\n    return a * b\n")
+        tests = sb.read_text("tests/test_calc.py")
+        sb.write_file("tests/test_calc.py", tests.replace("== 5", "== 5  # checked"))
+        patch = extract_patch(sb, task)
+    assert "tests/test_calc.py" in patch
+    res = evaluate(task, patch, cache_dir=cache)
+    assert res.resolved, res.error
+    assert res.ignored_files == ["tests/test_calc.py"]

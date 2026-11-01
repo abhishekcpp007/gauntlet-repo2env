@@ -37,7 +37,7 @@ A patch **resolves** a task when every `fail_to_pass` and `pass_to_pass` test pa
 from gauntlet_repo2env import load_tasks, open_task, extract_patch, evaluate
 
 task = load_tasks("pallets__itsdangerous.tasks.jsonl")[3]
-print(task.problem_statement)   # "don't allow timestamps from the future"
+print(task.problem_statement)  # "don't allow timestamps from the future"
 
 with open_task(task, trajectory_path="attempt.jsonl") as sb:
     # your agent goes here. It gets a gauntlet-sandbox with the repo at the
@@ -68,6 +68,7 @@ Every action the agent takes lands in `attempt.jsonl`, in the [gauntlet-sandbox]
 - Test extras (`.[test]`, `.[tests]`, `.[dev]`) and PEP 735 dependency groups
 - Projects that read their version from git tags (setuptools-scm, hatch-vcs), which normally break when built from `git archive`
 - Local paths as well as URLs, which is handy for private repos
+- Patches that try to game the grader. Before grading, any part of a candidate patch that touches tests, a `conftest.py`, `pytest.ini` or `tox.ini` gets dropped and listed in `ignored_files`. Without this, a 9-line conftest hook that rewrites every report to "passed" scored a resolve. [gauntlet-cheatcatcher](https://github.com/abhishekcpp007/gauntlet-cheatcatcher) flags the subtler stuff.
 
 The build container gets network access so pip can do its thing. Task and grading containers don't.
 

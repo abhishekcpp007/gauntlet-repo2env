@@ -8,10 +8,11 @@ the GitHub issue text (the commit message stands in as the problem statement for
 from __future__ import annotations
 
 import json
+import re
 import shlex
 import time
 from collections.abc import Iterator
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from gauntlet_sandbox import Sandbox, SandboxConfig
 from pydantic import BaseModel, Field
@@ -32,6 +33,10 @@ from .repo import (
 from .testrun import TestReport, run_tests
 
 PATCH_DIR = "/tmp/gauntlet-patches"
+# config files that decide what pytest collects. setup.cfg and pyproject.toml matter too, but
+# they hold real project settings, so they're left to gauntlet-cheatcatcher to flag instead.
+PYTEST_CONFIG_FILES = {"pytest.ini", ".pytest.ini", "tox.ini"}
+_DIFF_HEADER = re.compile(r'^diff --git "?a/(.+?)"? "?b/(.+?)"?$')
 GIT_ID = "-c user.name=gauntlet -c user.email=gauntlet@localhost"
 
 
@@ -64,6 +69,7 @@ class EvalResult(BaseModel):
     pass_to_pass: dict[str, bool] = Field(default_factory=dict)
     report: TestReport | None = None
     error: str | None = None
+    ignored_files: list[str] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------- file io
@@ -184,6 +190,60 @@ def mine_tasks(
         )
 
 
+# ---------------------------------------------------------------------- patch guarding
+
+
+def split_patch(patch: str) -> list[tuple[list[str], str]]:
+    """Split a git-style diff into per-file sections: (paths each one touches, its text).
+
+    Plain diffs without `diff --git` headers come back as one section, which errs on the
+    side of dropping too much rather than letting a test edit slip through.
+    """
+    chunks: list[list[str]] = []
+    for line in patch.splitlines(keepends=True):
+        if line.startswith("diff --git ") or not chunks:
+            chunks.append([])
+        chunks[-1].append(line)
+
+    sections = []
+    for lines in chunks:
+        paths: set[str] = set()
+        m = _DIFF_HEADER.match(lines[0].rstrip("\n"))
+        if m:
+            paths |= {m.group(1), m.group(2)}
+        for ln in lines:
+            if ln.startswith("@@") and m:
+                break  # a git section's headers are all above its first hunk
+            if ln.startswith(("--- ", "+++ ")):
+                p = ln[4:].split("\t")[0].strip().strip('"')
+                if p != "/dev/null":
+                    paths.add(p[2:] if p.startswith(("a/", "b/")) else p)
+            elif ln.startswith(("rename from ", "rename to ", "copy from ", "copy to ")):
+                paths.add(ln.split(" ", 2)[2].strip())
+        sections.append((sorted(paths), "".join(lines)))
+    return sections
+
+
+def _grader_owned(path: str, task: Task) -> bool:
+    return is_test_path(path) or PurePosixPath(path).name in PYTEST_CONFIG_FILES or path in task.test_files
+
+
+def strip_test_changes(patch: str, task: Task) -> tuple[str, list[str]]:
+    """Drop every part of a patch that touches tests, conftest.py or pytest config.
+
+    Grading should judge the code, not whatever the candidate did to the tests. This is what
+    stops a conftest.py hook that rewrites every report to "passed" from scoring a resolve.
+    """
+    kept, ignored = [], set()
+    for paths, text in split_patch(patch):
+        owned = [p for p in paths if _grader_owned(p, task)]
+        if owned:
+            ignored.update(owned)
+        else:
+            kept.append(text)
+    return "".join(kept), sorted(ignored)
+
+
 # ---------------------------------------------------------------------- agents and grading
 
 
@@ -234,7 +294,12 @@ def evaluate(
     trajectory_path: str | Path | None = None,
     cache_dir: Path | None = None,
 ) -> EvalResult:
-    """Apply a candidate patch, then the hidden tests, and check every graded test passes."""
+    """Apply a candidate patch, then the hidden tests, and check every graded test passes.
+
+    Changes the candidate made to tests, conftest.py files or pytest config are dropped first
+    and listed in `ignored_files`.
+    """
+    patch, ignored = strip_test_changes(patch, task)
     repo = clone(task.repo, cache_dir)
     sb = _boot(
         task.image,
@@ -249,7 +314,13 @@ def evaluate(
         try:
             _apply(sb, task.workdir, patch, "candidate")
         except PatchFailed as e:
-            return EvalResult(instance_id=task.instance_id, resolved=False, patch_applied=False, error=str(e))
+            return EvalResult(
+                instance_id=task.instance_id,
+                resolved=False,
+                patch_applied=False,
+                error=str(e),
+                ignored_files=ignored,
+            )
         try:
             _apply(sb, task.workdir, task.test_patch, "test")
         except PatchFailed as e:
@@ -258,6 +329,7 @@ def evaluate(
                 resolved=False,
                 patch_applied=True,
                 error=f"hidden tests clash with the patch: {e}",
+                ignored_files=ignored,
             )
         report = run_tests(sb, task.workdir, task.test_files, timeout=timeout)
     finally:
@@ -273,4 +345,5 @@ def evaluate(
         fail_to_pass=f2p,
         pass_to_pass=p2p,
         report=report,
+        ignored_files=ignored,
     )

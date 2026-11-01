@@ -2,7 +2,7 @@
 
 import pytest
 
-from gauntlet_repo2env import detect, install_script, parse_junit
+from gauntlet_repo2env import detect, install_script, parse_junit, split_patch, strip_test_changes
 from gauntlet_repo2env.repo import clone, history, is_test_module, is_test_path, resolve, slug_for
 
 
@@ -67,3 +67,53 @@ def test_parse_junit():
         "tests/test_b.py::test_e": "error",
         "tests/test_b.py::test_s": "skipped",
     }
+
+
+HACK = (
+    "diff --git a/conftest.py b/conftest.py\nnew file mode 100644\n--- /dev/null\n+++ b/conftest.py\n"
+    "@@ -0,0 +1 @@\n+collect_ignore = ['tests']\n"
+)
+SRC = "diff --git a/calc/ops.py b/calc/ops.py\n--- a/calc/ops.py\n+++ b/calc/ops.py\n@@ -1 +1 @@\n-x\n+y\n"
+INI = "diff --git a/tox.ini b/tox.ini\n--- a/tox.ini\n+++ b/tox.ini\n@@ -1 +1 @@\n-a\n+b\n"
+RENAME = (
+    "diff --git a/tests/test_a.py b/old_a.py\nsimilarity index 100%\n"
+    "rename from tests/test_a.py\nrename to old_a.py\n"
+)
+
+
+def _task(**kw):
+    from gauntlet_repo2env import Task
+
+    base = dict(
+        instance_id="x",
+        repo="r",
+        image="i",
+        workdir="/w",
+        base_commit="a",
+        solution_commit="b",
+        problem_statement="p",
+        gold_patch="",
+        test_patch="",
+        test_files=["tests/test_ops.py"],
+        fail_to_pass=[],
+        pass_to_pass=[],
+    )
+    return Task(**{**base, **kw})
+
+
+def test_split_patch():
+    sections = split_patch(SRC + HACK)
+    assert [paths for paths, _ in sections] == [["calc/ops.py"], ["conftest.py"]]
+    assert "".join(text for _, text in sections) == SRC + HACK
+
+
+def test_strip_test_changes_keeps_source_only():
+    kept, ignored = strip_test_changes(HACK + SRC + INI + RENAME, _task())
+    assert kept == SRC
+    assert ignored == ["conftest.py", "tests/test_a.py", "tox.ini"]
+
+
+def test_strip_test_changes_leaves_clean_patches_alone():
+    assert strip_test_changes(SRC, _task()) == (SRC, [])
+    assert strip_test_changes("", _task()) == ("", [])
+    assert strip_test_changes("not a diff\n", _task()) == ("not a diff\n", [])

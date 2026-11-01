@@ -13,6 +13,8 @@ from .tasks import (
     mine_tasks,
     open_task,
     save_tasks,
+    split_patch,
+    strip_test_changes,
 )
 from .testrun import TestReport, parse_junit, run_tests
 
@@ -38,5 +40,7 @@ __all__ = [
     "parse_junit",
     "run_tests",
     "save_tasks",
+    "split_patch",
+    "strip_test_changes",
 ]
 __version__ = "0.1.0"
