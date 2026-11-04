@@ -7,16 +7,13 @@ requires-python = ">=3.11"
 license = "MIT"
 authors = [{ name = "Abhishek", email = "akvikramaditya007cppcoder@gmail.com" }]
 keywords = ["agents", "swe-bench", "benchmark", "docker", "reinforcement-learning", "llm", "evaluation"]
-dependencies = ["gauntlet-sandbox", "pydantic>=2.6"]
+dependencies = ["gauntlet-sandbox @ git+https://github.com/abhishekcpp007/gauntlet-sandbox", "pydantic>=2.6"]
 
 [project.scripts]
 repo2env = "gauntlet_repo2env.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/abhishekcpp007/gauntlet-repo2env"
-
-[tool.uv.sources]
-gauntlet-sandbox = { path = "../sandbox", editable = true }
 
 [dependency-groups]
 dev = ["pytest>=8", "ruff>=0.6"]
