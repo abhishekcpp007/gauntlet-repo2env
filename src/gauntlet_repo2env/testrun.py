@@ -30,12 +30,25 @@ class TestReport(BaseModel):
         )
 
 
-def _test_id(case: ET.Element) -> str:
+_SOURCE_SUFFIXES = (".py", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".go", ".rs", ".rb", ".java")
+
+
+def _looks_like_a_path(value: str | None) -> str | None:
+    """A suite name that is really a file path, which is how vitest and others label a suite."""
+    if value and value.endswith(_SOURCE_SUFFIXES):
+        return value
+    return None
+
+
+def _test_id(case: ET.Element, suite_file: str | None = None) -> str:
     name = case.get("name", "?")
     classname = case.get("classname", "")
-    file = case.get("file")
+    # pytest puts `file` on the testcase. jest-junit puts it on the parent testsuite, and
+    # vitest uses the suite's name for it, so fall back to whatever the suite knows.
+    file = case.get("file") or suite_file
     if not file:
-        return f"{classname}::{name}" if classname else name
+        # some runners repeat the test name as the classname, which would say it twice
+        return name if not classname or classname == name else f"{classname}::{name}"
     module = str(PurePosixPath(file).with_suffix("")).replace("/", ".")
     if classname.startswith(module + "."):
         return f"{file}::{classname[len(module) + 1 :]}::{name}"
@@ -46,16 +59,21 @@ def parse_junit(xml_text: str) -> dict[str, str]:
     """Map each test id to passed, failed, error or skipped."""
     results: dict[str, str] = {}
     root = ET.fromstring(xml_text)
-    for case in root.iter("testcase"):
-        status = "passed"
-        for child in case:
-            if child.tag == "failure":
-                status = "failed"
-            elif child.tag == "error":
-                status = "error"
-            elif child.tag == "skipped":
-                status = "skipped"
-        results[_test_id(case)] = status
+    # walk suite by suite rather than flattening, because a testcase element has no parent
+    # pointer and the file it came from is often recorded on the suite
+    suites = list(root.iter("testsuite")) or [root]
+    for suite in suites:
+        suite_file = suite.get("file") or _looks_like_a_path(suite.get("name"))
+        for case in suite.findall("testcase"):
+            status = "passed"
+            for child in case:
+                if child.tag == "failure":
+                    status = "failed"
+                elif child.tag == "error":
+                    status = "error"
+                elif child.tag == "skipped":
+                    status = "skipped"
+            results[_test_id(case, suite_file)] = status
     return results
 
 

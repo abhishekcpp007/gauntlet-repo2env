@@ -121,3 +121,62 @@ def test_strip_test_changes_leaves_clean_patches_alone():
     assert strip_test_changes(SRC, _task()) == (SRC, [])
     assert strip_test_changes("", _task()) == ("", [])
     assert strip_test_changes("not a diff\n", _task()) == ("not a diff\n", [])
+
+
+# ---------------------------------------------- ids from runners that are not pytest
+
+JEST_XML = """<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="jest tests" tests="2" failures="1">
+<testsuite name="calc" tests="2" failures="1" file="src/__tests__/calc.test.js">
+<testcase classname="calc adds numbers" name="calc adds numbers" time="0.004"/>
+<testcase classname="calc divides numbers" name="calc divides numbers" time="0.002">
+<failure>Expected 1 but received 2</failure></testcase>
+</testsuite></testsuites>"""
+
+VITEST_XML = """<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="vitest tests" tests="1">
+<testsuite name="src/calc.test.ts" tests="1">
+<testcase classname="src/calc.test.ts" name="adds numbers" time="0.003"/>
+</testsuite></testsuites>"""
+
+NO_FILE_XML = """<?xml version="1.0" encoding="UTF-8"?>
+<testsuites tests="1"><testsuite name="example.com/calc" tests="1">
+<testcase classname="example.com/calc" name="TestAdd" time="0.001"/>
+</testsuite></testsuites>"""
+
+
+def test_a_suites_file_attribute_names_the_test():
+    """jest-junit records the file on the testsuite, not on each testcase."""
+    assert parse_junit(JEST_XML) == {
+        "src/__tests__/calc.test.js::calc adds numbers": "passed",
+        "src/__tests__/calc.test.js::calc divides numbers": "failed",
+    }
+
+
+def test_a_suite_named_after_a_file_counts_as_one():
+    """vitest labels the suite with the path instead of setting `file`."""
+    assert parse_junit(VITEST_XML) == {"src/calc.test.ts::adds numbers": "passed"}
+
+
+def test_a_suite_name_that_is_not_a_path_is_left_alone():
+    """Go packages are not files, so inventing a path from one would be a lie."""
+    assert parse_junit(NO_FILE_XML) == {"example.com/calc::TestAdd": "passed"}
+
+
+def test_a_repeated_classname_is_not_said_twice():
+    xml = """<testsuite name="s" tests="1">
+    <testcase classname="adds numbers" name="adds numbers"/></testsuite>"""
+    assert parse_junit(xml) == {"adds numbers": "passed"}
+
+
+def test_pytest_ids_are_untouched():
+    """The ids in every existing task are pytest ids. They have to come out the same."""
+    xml = """<testsuites><testsuite name="pytest" tests="2">
+    <testcase classname="tests.test_calc" file="tests/test_calc.py" name="test_add"/>
+    <testcase classname="tests.test_calc.TestMath" file="tests/test_calc.py" name="test_div">
+    <failure message="x">boom</failure></testcase>
+    </testsuite></testsuites>"""
+    assert parse_junit(xml) == {
+        "tests/test_calc.py::test_add": "passed",
+        "tests/test_calc.py::TestMath::test_div": "failed",
+    }
