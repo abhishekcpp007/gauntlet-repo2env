@@ -277,13 +277,24 @@ def open_task(
 
 
 def extract_patch(sb: Sandbox, task: Task) -> str:
-    """Everything the agent changed since `open_task`, as a git diff."""
-    res = sb.exec("git add -A && git diff --cached --binary", workdir=task.workdir)
+    """Everything the agent changed since `open_task`, as a git diff.
+
+    The diff goes through a file, not stdout. Exec output is capped, and a release-range task's
+    patch can run to a few hundred KB (cattrs 26.1.0 -> 26.2.0 is 273 KB), which used to come
+    back as an error instead of the agent's work. A fresh mktemp dir means nothing the agent
+    left lying around in /tmp can stand in for the file.
+    """
+    res = sb.exec(
+        'd=$(mktemp -d) && git add -A && git diff --cached --binary > "$d/patch" && echo "$d"',
+        workdir=task.workdir,
+    )
     if not res.ok:
         raise Repo2EnvError(f"couldn't diff: {res.stderr.strip()}")
-    if res.truncated:
-        raise Repo2EnvError("patch is bigger than the sandbox output cap, raise max_output_bytes")
-    return res.stdout
+    where = res.stdout.strip().splitlines()[-1]
+    try:
+        return sb.read_file(f"{where}/patch").decode("utf-8", errors="surrogateescape")
+    finally:
+        sb.exec(f"rm -rf {shlex.quote(where)}")
 
 
 def evaluate(

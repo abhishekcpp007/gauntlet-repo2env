@@ -94,6 +94,18 @@ def test_agent_loop(built, tmp_path):
     assert evaluate(task, patch, cache_dir=cache).resolved
 
 
+def test_a_patch_past_the_output_cap_comes_back_whole(built):
+    # release-range tasks have gold patches of 140 to 270 KB, and exec output is capped at 200 KB
+    _, tasks, cache = built
+    task = next(t for t in tasks if t.problem_statement.startswith("Add mul"))
+    table = "".join(f"ROW_{i:06d} = {i}\n" for i in range(20_000))  # about 330 KB
+    with open_task(task, cache_dir=cache) as sb:
+        sb.write_file("calc/table.py", table)
+        patch = extract_patch(sb, task)
+    assert len(patch) > 300_000
+    assert "+ROW_000000 = 0" in patch and "+ROW_019999 = 19999" in patch
+
+
 def test_wrong_fix_fails(built):
     _, tasks, cache = built
     task = next(t for t in tasks if t.problem_statement.startswith("Add mul"))
