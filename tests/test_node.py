@@ -133,8 +133,10 @@ def test_a_python_stack_is_unchanged(calc_repo, tmp_path):
     [
         ("src/calc.test.ts", True, True, False),
         ("src/calc.spec.js", True, True, False),
-        ("src/__tests__/calc.ts", True, False, False),
-        ("test/helpers.ts", True, False, False),
+        ("src/__tests__/calc.ts", True, True, False),  # immer: __tests__/base.js
+        ("tests/doc/anchors.ts", True, True, False),  # yaml: no .test in the name
+        ("test/types.d.ts", True, False, False),
+        ("test/fixtures/data.json", True, False, False),
         ("src/calc.ts", False, False, True),
         ("src/contest.ts", False, False, True),  # "test" inside a word is not a test
         ("src/latest.js", False, False, True),

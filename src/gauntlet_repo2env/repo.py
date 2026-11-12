@@ -122,11 +122,19 @@ _JS_SUFFIXES = {".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".mts", ".cts"}
 
 
 def _is_js_test_module(p: PurePosixPath) -> bool:
-    """calc.test.ts, calc.spec.js and friends: the names vitest and jest collect by default."""
-    if p.suffix not in _JS_SUFFIXES:
+    """A JS or TS file a runner may collect tests from.
+
+    calc.test.ts and calc.spec.js are the default names. A file inside a test folder counts
+    too, whatever it is called: immer keeps its suite in `__tests__/base.js` and yaml in
+    `tests/doc/anchors.ts`, each with an `include` in its vitest config to match. Reading that
+    config would mean running it. Being generous here costs nothing, because a file the runner
+    doesn't collect reports no tests and the PR is turned away at the next stage for that.
+    """
+    if p.suffix not in _JS_SUFFIXES or p.name.endswith((".d.ts", ".d.mts", ".d.cts")):
         return False
-    inner = PurePosixPath(p.stem).suffix
-    return inner in (".test", ".spec")
+    if PurePosixPath(p.stem).suffix in (".test", ".spec"):
+        return True
+    return any(part in _TEST_DIRS for part in p.parts[:-1])
 
 
 def is_test_path(path: str) -> bool:
