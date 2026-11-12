@@ -199,3 +199,75 @@ def test_pytest_ids_are_untouched():
         "tests/test_calc.py::test_add": "passed",
         "tests/test_calc.py::TestMath::test_div": "failed",
     }
+
+
+def _runner_dep_repo(root, name: str):
+    """A setuptools-scm project called `name`, tagged v1.4.0, then one commit, then 1.5.0."""
+    import subprocess
+
+    repo = root / name
+    repo.mkdir()
+
+    def git(*args):
+        subprocess.run(
+            ["git", "-c", "user.name=t", "-c", "user.email=t@t", "-C", str(repo), *args],
+            check=True,
+            capture_output=True,
+        )
+
+    (repo / "pyproject.toml").write_text(
+        f'[project]\nname = "{name}"\ndynamic = ["version"]\n\n'
+        '[project.optional-dependencies]\ntesting = ["pytest"]\n\n'
+        '[build-system]\nrequires = ["setuptools>=45", "setuptools-scm>=6.2"]\n'
+        'build-backend = "setuptools.build_meta"\n'
+    )
+    git("init", "-q", "-b", "main")
+    git("add", "-A")
+    git("commit", "-q", "-m", "init")
+    git("tag", "v1.4.0")
+    (repo / "README").write_text("x\n")
+    git("add", "-A")
+    git("commit", "-q", "-m", "between releases")
+    head = ["git", "-C", str(repo), "rev-parse", "HEAD"]
+    middle = subprocess.run(head, capture_output=True, text=True).stdout
+    (repo / "README").write_text("y\n")
+    git("commit", "-q", "-am", "release")
+    git("tag", "1.5.0")
+    return repo, middle.strip()
+
+
+def test_pytests_own_deps_get_their_release_version(tmp_path):
+    # Stamped 0.0.0, pluggy sends pip back to a pytest from 2017 that can't import on 3.12
+    src, middle = _runner_dep_repo(tmp_path, "pluggy")
+    repo = clone(str(src), tmp_path / "cache")
+    at_tag = detect(repo, resolve(repo, "v1.4.0"))
+    assert at_tag.package_name == "pluggy"
+    assert at_tag.scm_version == "1.4.0"
+    assert 'SETUPTOOLS_SCM_PRETEND_VERSION:-1.4.0}"' in install_script(at_tag)
+    # between releases it's the release before, never the one that comes later
+    assert detect(repo, middle).scm_version == "1.4.0"
+    assert detect(repo, resolve(repo, "1.5.0")).scm_version == "1.5.0"
+
+
+def test_other_projects_keep_the_zero_version(tmp_path, calc_repo):
+    # every other env's install script, and so its fingerprint, stays what it was
+    src, _ = _runner_dep_repo(tmp_path, "my_lib")
+    repo = clone(str(src), tmp_path / "cache")
+    stack = detect(repo, resolve(repo, "v1.4.0"))
+    assert stack.package_name == "my_lib" and stack.scm_version is None
+    assert 'SETUPTOOLS_SCM_PRETEND_VERSION:-0.0.0}"' in install_script(stack)
+    calc = clone(str(calc_repo), tmp_path / "cache2")
+    assert 'SETUPTOOLS_SCM_PRETEND_VERSION:-0.0.0}"' in install_script(detect(calc, resolve(calc, "HEAD")))
+
+
+def test_a_runner_dep_with_a_static_version_is_left_alone(tmp_path):
+    # tomli and packaging build with flit, so the pretend version never reaches them
+    src, _ = _runner_dep_repo(tmp_path, "packaging")
+    py = src / "pyproject.toml"
+    py.write_text(py.read_text().replace('"setuptools>=45", "setuptools-scm>=6.2"', '"flit_core>=3.2"'))
+    import subprocess
+
+    ident = ["-c", "user.name=t", "-c", "user.email=t@t"]
+    subprocess.run(["git", *ident, "-C", str(src), "commit", "-qam", "flit"], check=True)
+    repo = clone(str(src), tmp_path / "cache")
+    assert detect(repo, resolve(repo, "HEAD")).scm_version is None

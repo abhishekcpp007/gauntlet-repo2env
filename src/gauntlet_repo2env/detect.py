@@ -12,7 +12,7 @@ from pathlib import PurePosixPath
 
 from pydantic import BaseModel, Field
 
-from .repo import Repo, files_at, read_at
+from .repo import GitError, Repo, files_at, git, read_at
 
 TEST_EXTRA_NAMES = ("test", "tests", "testing", "dev")
 
@@ -53,6 +53,45 @@ class Stack(BaseModel):
     # the PEP 517 build backend, installed into the env so the project can be reinstalled
     # offline later (a task sandbox at an older commit has to regenerate files like _version.py)
     build_requires: list[str] = Field(default_factory=list)
+    # the version setuptools-scm / hatch-vcs is told to stamp on the install, when 0.0.0 won't
+    # do (see RUNNER_DEPS). None keeps the 0.0.0 default.
+    scm_version: str | None = None
+
+
+# pytest's own dependencies. The env installs the repo's project and then pytest, and with the
+# project stamped 0.0.0 pip can't give pytest the pluggy it asks for (>=1.5 today), so it walks
+# back to a pytest from 2017 that still imports `imp` and dies on Python 3.12 before it runs a
+# test. pluggy 1.4.0 -> 1.5.0 came back with no results at all for this reason. These projects
+# get the nearest release tag at or before the commit instead, the version upstream's own CI saw.
+# Nothing else does, so every other env keeps the install script (and fingerprint) it had.
+RUNNER_DEPS = frozenset(
+    {"pluggy", "iniconfig", "packaging", "exceptiongroup", "tomli", "colorama", "pygments"}
+)
+PEP440 = re.compile(r"^\d+(\.\d+)*((a|b|rc)\d+)?(\.post\d+)?(\.dev\d+)?$")
+
+
+def _normalize_name(name: str) -> str:
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def _versioned_by_git(stack: Stack) -> bool:
+    """Whether the build reads its version from git, the only case the pretend version touches.
+    tomli and packaging are runner deps too, but flit takes their version from the source."""
+    return any(re.match(r"(setuptools[-_]scm|hatch[-_]vcs)\b", r, re.I) for r in stack.build_requires)
+
+
+def release_version(repo: Repo, sha: str) -> str | None:
+    """The nearest tag reachable from `sha`, as a PEP 440 version, or None.
+
+    Only ancestors count, so this never says anything about a release that came after the
+    commit, and a task env built from it doesn't leak the future.
+    """
+    try:
+        tag = git(repo.path, "describe", "--tags", "--abbrev=0", sha).strip()
+    except GitError:
+        return None
+    version = tag.removeprefix("v")
+    return version if PEP440.match(version) else None
 
 
 # Folders whose requirements files are the test suite's own deps. tablib keeps pytest-cov in
@@ -92,6 +131,8 @@ def detect(repo: Repo, sha: str) -> Stack:
         except tomllib.TOMLDecodeError:
             data = {}
         project = data.get("project", {})
+        if isinstance(project.get("name"), str):
+            stack.package_name = project["name"]
         extras |= set(project.get("optional-dependencies", {}))
         stack.requires_python = project.get("requires-python")
         stack.dependency_groups = [g for g in data.get("dependency-groups", {}) if g in TEST_EXTRA_NAMES]
@@ -107,6 +148,8 @@ def detect(repo: Repo, sha: str) -> Stack:
         cfg = configparser.ConfigParser()
         try:
             cfg.read_string(read_at(repo, sha, "setup.cfg") or "")
+            if not stack.package_name and cfg.has_option("metadata", "name"):
+                stack.package_name = cfg["metadata"]["name"]
             if cfg.has_section("options.extras_require"):
                 extras |= set(cfg["options.extras_require"])
             if cfg.has_section("metadata") or cfg.has_section("options"):
@@ -117,6 +160,8 @@ def detect(repo: Repo, sha: str) -> Stack:
     stack.extras = sorted(e for e in extras if e in TEST_EXTRA_NAMES)
     if stack.installable and not stack.build_requires:
         stack.build_requires = ["setuptools>=40.8.0", "wheel"]  # pip's legacy default backend
+    if _versioned_by_git(stack) and _normalize_name(stack.package_name or "") in RUNNER_DEPS:
+        stack.scm_version = release_version(repo, sha)
     return stack
 
 
@@ -247,10 +292,11 @@ def install_script(stack: Stack) -> str:
         return _node_install_script(stack)
     # no wheel cache: a cached build of the project could outlive the commit it came from
     pip = "python -m pip install -q --disable-pip-version-check --no-cache-dir"
+    version = stack.scm_version or "0.0.0"
     lines = [
         "set -e",
         # git archive drops .git, so version-from-git plugins (setuptools-scm, hatch-vcs) need a hint
-        'export SETUPTOOLS_SCM_PRETEND_VERSION="${SETUPTOOLS_SCM_PRETEND_VERSION:-0.0.0}"',
+        f'export SETUPTOOLS_SCM_PRETEND_VERSION="${{SETUPTOOLS_SCM_PRETEND_VERSION:-{version}}}"',
         f"{pip} --upgrade pip",
     ]
     for req in stack.requirements:
