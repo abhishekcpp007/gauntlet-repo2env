@@ -232,3 +232,8 @@ def test_no_package_manager_cache_is_left_in_the_image():
     # pnpm's content store: radashi #493 was rejected by the leak check for a line found there
     assert "/root/.local/share/pnpm" in PACKAGE_CACHES
     assert {"/root/.cache", "/root/.npm", "/usr/local/share/.cache"} <= set(PACKAGE_CACHES)
+
+
+def test_an_end_of_life_node_is_raised_to_one_that_still_builds(tmp_path):
+    stack = _stack(tmp_path, {"package.json": _package(engines={"node": ">=16.0.0"})})
+    assert stack.node == "18" and base_image_for(stack) == "node:18-slim"

@@ -27,6 +27,7 @@ MARKERS = {
 
 
 DEFAULT_NODE = "22"
+NODE_FLOOR = 18  # the oldest node image that still builds, see _detect_node
 # newest first: a lockfile says which package manager wrote the tree that was tested upstream
 LOCKFILES = {"pnpm-lock.yaml": "pnpm", "yarn.lock": "yarn", "package-lock.json": "npm"}
 
@@ -185,7 +186,11 @@ def _detect_node(repo: Repo, sha: str, files: list[str], root: set[str]) -> Stac
 
     engines = pkg.get("engines") if isinstance(pkg.get("engines"), dict) else {}
     pinned = next((read_at(repo, sha, f) for f in (".nvmrc", ".node-version") if f in root), None)
-    stack.node = _node_major(pinned) or _node_major(engines.get("node")) or DEFAULT_NODE
+    asked = _node_major(pinned) or _node_major(engines.get("node")) or DEFAULT_NODE
+    # `engines: >=16` is a promise about the oldest node that works, not a request for it. The
+    # node:16 image is Debian buster, whose package repositories are gone, so apt-get fails and
+    # the env can't be built at all. Seven radashi PRs were lost to that before this floor.
+    stack.node = str(max(int(asked), NODE_FLOOR))
 
     # In a workspace the tests of one package resolve its siblings through symlinks the package
     # manager writes into node_modules, and the env keeps node_modules outside the repo. Saying
