@@ -20,6 +20,19 @@ ENV_REPO = "gauntlet-env"
 
 Log = Callable[[str], None]
 
+# Where pip, npm, yarn and pnpm keep what they downloaded. None of it is needed once the
+# install is done. pnpm's store is the one that looks like it is: node_modules is hard-linked
+# into it, so removing the store leaves every installed file in place. Left behind, it is a
+# second copy of every dependency under hashed names, and a leak check that finds a line there
+# can't tell which package it came from.
+PACKAGE_CACHES = (
+    "/root/.cache",
+    "/root/.npm",
+    "/root/.local/share/pnpm",
+    "/usr/local/share/.cache",
+    "/root/.yarn/berry/cache",
+)
+
 
 class UnsupportedRepo(Repo2EnvError):
     pass
@@ -128,8 +141,8 @@ def build_env(
             baseline = TestReport()
 
         # leave nothing behind that a later task sandbox could learn from: grader scratch
-        # files, pip, npm and apt caches
-        sb.exec("rm -rf /tmp/gauntlet-* /root/.cache /root/.npm /var/lib/apt/lists/*")
+        # files, and every package manager's cache
+        sb.exec(f"rm -rf /tmp/gauntlet-* /var/lib/apt/lists/* {' '.join(PACKAGE_CACHES)}")
 
         snap = sb.snapshot(label="env")
         image = sb.client.images.get(snap)

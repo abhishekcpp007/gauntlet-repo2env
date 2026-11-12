@@ -224,3 +224,11 @@ def test_a_pnpm_settings_file_is_not_a_workspace(tmp_path):
         tmp_path, {"pnpm-workspace.yaml": "allowBuilds:\n  esbuild: true\n", "pnpm-lock.yaml": "x\n"}
     )
     assert stack.unsupported is None and stack.package_manager == "pnpm"
+
+
+def test_no_package_manager_cache_is_left_in_the_image():
+    from gauntlet_repo2env.env import PACKAGE_CACHES
+
+    # pnpm's content store: radashi #493 was rejected by the leak check for a line found there
+    assert "/root/.local/share/pnpm" in PACKAGE_CACHES
+    assert {"/root/.cache", "/root/.npm", "/usr/local/share/.cache"} <= set(PACKAGE_CACHES)
