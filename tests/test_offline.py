@@ -51,6 +51,25 @@ def test_detect_python(calc_repo, tmp_path):
     assert all("--no-cache-dir" in line for line in script.splitlines() if "pip install" in line)
 
 
+@pytest.mark.parametrize(
+    ("path", "is_req"),
+    [
+        ("requirements.txt", True),
+        ("dev-requirements.txt", True),
+        ("requirements/test.txt", True),
+        ("tests/requirements.txt", True),  # tablib: pytest-cov lives here
+        ("test/requirements-ci.txt", True),
+        ("tests/data/requirements.txt", False),  # fixture data, not deps
+        ("docs/requirements.txt", False),
+        ("tests/notes.txt", False),
+    ],
+)
+def test_requirements_files(path, is_req):
+    from gauntlet_repo2env.detect import _is_requirements
+
+    assert _is_requirements(path) is is_req
+
+
 def test_history(calc_repo, tmp_path):
     repo = clone(str(calc_repo), tmp_path / "cache")
     msgs = [m.splitlines()[0] for _, m in history(repo, "HEAD", 10)]

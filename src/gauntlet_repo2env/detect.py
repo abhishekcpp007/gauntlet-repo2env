@@ -36,9 +36,17 @@ class Stack(BaseModel):
     build_requires: list[str] = Field(default_factory=list)
 
 
+# Folders whose requirements files are the test suite's own deps. tablib keeps pytest-cov in
+# tests/requirements.txt and its pytest.ini passes --cov, so without it pytest exits on a usage
+# error before it writes a report and every task from the repo comes back with no results.
+TEST_REQUIREMENT_DIRS = ("tests", "test", "testing")
+
+
 def _is_requirements(path: str) -> bool:
     p = PurePosixPath(path)
     if len(p.parts) == 1:
+        return fnmatch.fnmatch(p.name, "*requirements*.txt")
+    if len(p.parts) == 2 and p.parts[0] in TEST_REQUIREMENT_DIRS:
         return fnmatch.fnmatch(p.name, "*requirements*.txt")
     return len(p.parts) == 2 and p.parts[0] == "requirements" and p.suffix == ".txt"
 
