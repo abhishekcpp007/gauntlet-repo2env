@@ -231,6 +231,11 @@ _JS_CONFIG = re.compile(
 )
 
 
+def is_js_runner_config(path: str) -> bool:
+    """A vitest, vite or jest config or setup file, by name."""
+    return bool(_JS_CONFIG.match(PurePosixPath(path).name))
+
+
 def _grader_owned(path: str, task: Task) -> bool:
     p = PurePosixPath(path)
     if is_test_path(path) or p.name in PYTEST_CONFIG_FILES or path in task.test_files:
