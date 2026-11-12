@@ -271,3 +271,29 @@ def test_a_runner_dep_with_a_static_version_is_left_alone(tmp_path):
     subprocess.run(["git", *ident, "-C", str(src), "commit", "-qam", "flit"], check=True)
     repo = clone(str(src), tmp_path / "cache")
     assert detect(repo, resolve(repo, "HEAD")).scm_version is None
+
+
+def test_c_sources_get_a_compiler(tmp_path):
+    # markupsafe's _speedups.c: with no gcc, setup.py retries without it and that retry fails
+    src, _ = _runner_dep_repo(tmp_path, "speedy")
+    (src / "src").mkdir()
+    (src / "src" / "_speedups.c").write_text("int x;\n")
+    (src / "tests").mkdir()
+    (src / "tests" / "fixture.c").write_text("int y;\n")
+    import subprocess
+
+    ident = ["-c", "user.name=t", "-c", "user.email=t@t"]
+    subprocess.run(["git", *ident, "-C", str(src), "add", "-A"], check=True)
+    subprocess.run(["git", *ident, "-C", str(src), "commit", "-qm", "c"], check=True)
+    repo = clone(str(src), tmp_path / "cache")
+    native = detect(repo, resolve(repo, "HEAD"))
+    assert native.native and "install -y -qq --no-install-recommends gcc" in install_script(native)
+    pure = detect(repo, resolve(repo, "v1.4.0"))
+    assert not pure.native and "gcc" not in install_script(pure)
+
+
+def test_c_files_only_in_tests_need_no_compiler(tmp_path, calc_repo):
+    from gauntlet_repo2env.detect import _has_native_sources
+
+    assert not _has_native_sources(["tests/fixture.c", "docs/x.c", "calc/__init__.py"])
+    assert _has_native_sources(["src/pkg/_speedups.c"])

@@ -56,6 +56,8 @@ class Stack(BaseModel):
     # the version setuptools-scm / hatch-vcs is told to stamp on the install, when 0.0.0 won't
     # do (see RUNNER_DEPS). None keeps the 0.0.0 default.
     scm_version: str | None = None
+    # C or Cython sources: the build needs a compiler, which the slim image doesn't have
+    native: bool = False
 
 
 # pytest's own dependencies. The env installs the repo's project and then pytest, and with the
@@ -100,6 +102,14 @@ def release_version(repo: Repo, sha: str) -> str | None:
 TEST_REQUIREMENT_DIRS = ("tests", "test", "testing")
 
 
+NATIVE_SOURCES = (".c", ".pyx", ".cpp")
+NOT_SHIPPED = ("tests", "test", "testing", "docs", "doc", "bench", "benchmarks", "examples")
+
+
+def _has_native_sources(files: list[str]) -> bool:
+    return any(f.endswith(NATIVE_SOURCES) and PurePosixPath(f).parts[0] not in NOT_SHIPPED for f in files)
+
+
 def _is_requirements(path: str) -> bool:
     p = PurePosixPath(path)
     if len(p.parts) == 1:
@@ -121,7 +131,11 @@ def detect(repo: Repo, sha: str) -> Stack:
             return _detect_node(repo, sha, files, root)
         return Stack(language=language, runner="unknown")
 
-    stack = Stack(language="python", requirements=requirements)
+    stack = Stack(
+        language="python",
+        requirements=requirements,
+        native=_has_native_sources(files),
+    )
     extras: set[str] = set()
 
     pyproject = read_at(repo, sha, "pyproject.toml") if "pyproject.toml" in root else None
@@ -299,6 +313,11 @@ def install_script(stack: Stack) -> str:
         f'export SETUPTOOLS_SCM_PRETEND_VERSION="${{SETUPTOOLS_SCM_PRETEND_VERSION:-{version}}}"',
         f"{pip} --upgrade pip",
     ]
+    if stack.native:
+        lines.append(
+            "apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "
+            "--no-install-recommends gcc libc6-dev >/dev/null"
+        )
     for req in stack.requirements:
         lines.append(f"{pip} -r {shlex.quote(req)}")
     if stack.installable:
