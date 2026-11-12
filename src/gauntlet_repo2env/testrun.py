@@ -1,4 +1,4 @@
-"""Run pytest inside a sandbox and turn its JUnit XML into per-test results."""
+"""Run a repo's tests inside a sandbox and turn the JUnit XML into per-test results."""
 
 from __future__ import annotations
 
@@ -77,21 +77,50 @@ def parse_junit(xml_text: str) -> dict[str, str]:
     return results
 
 
+RUNNERS = ("pytest", "vitest")
+
+
+def suite_command(runner: str, junit_path: str, targets: list[str], *, keep_going: bool = False) -> str:
+    """The shell command that runs `targets` (or everything) and writes JUnit XML to `junit_path`.
+
+    One place, because the env build, task validation and grading all have to run a suite the
+    same way or a test id stops meaning the same thing between them.
+    """
+    listing = " ".join(shlex.quote(t) for t in targets)
+    if runner == "pytest":
+        extra = "--continue-on-collection-errors " if keep_going else ""
+        return (
+            f"rm -f {junit_path}; python -m pytest -p no:cacheprovider -q -o junit_family=xunit1 "
+            f"{extra}--junitxml={junit_path} {listing}"
+        )
+    if runner == "vitest":
+        # Called by path, not through npx or a package.json script: node_modules sits one level
+        # above the repo (see detect.NODE_MODULES_SCRIPT), and a script the repo defines is the
+        # repo's to change. `run` is one pass with no watch mode; a file that fails to load is
+        # reported as a failed suite and the rest still run.
+        return (
+            f"rm -f {junit_path}; CI=1 node ../node_modules/vitest/vitest.mjs run "
+            f"--reporter=junit --outputFile={junit_path} {listing}"
+        )
+    raise ValueError(f"no suite command for test runner {runner!r}")
+
+
 def run_tests(
-    sb: Sandbox, workdir: str, test_files: list[str] | None = None, *, timeout: float = 600
+    sb: Sandbox,
+    workdir: str,
+    test_files: list[str] | None = None,
+    *,
+    timeout: float = 600,
+    runner: str = "pytest",
 ) -> TestReport:
-    targets = " ".join(shlex.quote(f) for f in test_files or [])
-    cmd = (
-        f"rm -f {JUNIT_PATH}; python -m pytest -p no:cacheprovider -q -o junit_family=xunit1 "
-        f"--junitxml={JUNIT_PATH} {targets}"
-    )
+    cmd = suite_command(runner, JUNIT_PATH, test_files or [])
     res = sb.exec(cmd, workdir=workdir, timeout=timeout)
     tail = (res.stdout + res.stderr)[-4000:]
     report = TestReport(exit_code=res.exit_code, duration=res.duration, output_tail=tail)
     try:
         xml_text = sb.read_text(JUNIT_PATH)
     except FileNotFoundError:
-        return report  # pytest died before writing results, the tail says why
+        return report  # the runner died before writing results, the tail says why
 
     buckets = {"passed": report.passed, "failed": report.failed, "error": report.errors}
     buckets["skipped"] = report.skipped

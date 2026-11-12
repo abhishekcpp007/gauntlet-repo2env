@@ -117,17 +117,38 @@ def history(repo: Repo, ref: str, limit: int) -> list[tuple[str, str]]:
     return commits
 
 
-_TEST_DIRS = {"test", "tests", "testing"}
+_TEST_DIRS = {"test", "tests", "testing", "__tests__"}
+_JS_SUFFIXES = {".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".mts", ".cts"}
+
+
+def _is_js_test_module(p: PurePosixPath) -> bool:
+    """calc.test.ts, calc.spec.js and friends: the names vitest and jest collect by default."""
+    if p.suffix not in _JS_SUFFIXES:
+        return False
+    inner = PurePosixPath(p.stem).suffix
+    return inner in (".test", ".spec")
 
 
 def is_test_path(path: str) -> bool:
     p = PurePosixPath(path)
     if p.name == "conftest.py" or any(part in _TEST_DIRS for part in p.parts[:-1]):
         return True
+    if _is_js_test_module(p):
+        return True
     return p.suffix == ".py" and (p.name.startswith("test_") or p.stem.endswith("_test"))
 
 
 def is_test_module(path: str) -> bool:
-    """A file pytest would collect tests from by default."""
+    """A file the test runner would collect tests from by default."""
     p = PurePosixPath(path)
+    if _is_js_test_module(p):
+        return True
     return p.suffix == ".py" and (p.name.startswith("test_") or p.stem.endswith("_test"))
+
+
+def is_source_path(path: str, language: str = "python") -> bool:
+    """Code in the task's language that isn't a test: what a gold patch has to change."""
+    if is_test_path(path):
+        return False
+    suffix = PurePosixPath(path).suffix
+    return suffix in _JS_SUFFIXES if language == "node" else suffix == ".py"

@@ -23,4 +23,5 @@ jobs:
       - run: uv run ruff check .
       - run: uv run ruff format --check .
       - run: docker pull python:3.12-slim
+      - run: docker pull node:22-slim
       - run: uv run pytest -v

@@ -1,6 +1,6 @@
 # gauntlet-repo2env
 
-Point it at a Python repo. It builds a Docker image with the project and its test deps installed, then digs through the git history for real coding tasks you can hand to an AI agent and grade automatically.
+Point it at a Python repo, or a Node one tested with vitest. It builds a Docker image with the project and its test deps installed, then digs through the git history for real coding tasks you can hand to an AI agent and grade automatically.
 
 It's the same idea behind SWE-bench, packaged so you can run it on any repo you like in a couple of minutes.
 
@@ -74,7 +74,8 @@ The build container gets network access so pip can do its thing. Task and gradin
 
 ## Limits worth knowing
 
-- Python and pytest only for now. Node, Go and Rust repos get a clear "not supported yet" instead of a weird failure.
+- Python with pytest, and Node with vitest. A Node env keeps `node_modules` one folder above the repo, because a task sandbox empties the repo folder before it unpacks a commit, and Node finds packages in any parent folder anyway.
+- Node repos that are workspaces, locked with bun, or tested with jest get a clear reason instead of a broken env. So do Go and Rust repos. Mining tasks from git history (`repo2env mine`) is still Python only. Node tasks are built from PRs by gauntlet-harness.
 - The env image is built once, at the commit you pick. Tasks from much older history can fail to install or import if dependencies moved a lot. Rebuild with `--ref` closer to that era if you need them.
 - The commit message stands in for the problem statement. Pulling the linked GitHub issue text is on the list.
 

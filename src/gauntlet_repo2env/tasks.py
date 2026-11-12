@@ -224,8 +224,20 @@ def split_patch(patch: str) -> list[tuple[list[str], str]]:
     return sections
 
 
+# The same idea for JS runners: the files that decide what gets collected and what runs before it.
+# package.json is left out for the reason pyproject.toml is. A fix can really need it.
+_JS_CONFIG = re.compile(
+    r"^(vitest|vite|jest)\.(config|workspace|setup)\.[cm]?[jt]sx?$|^setupTests\.[cm]?[jt]sx?$"
+)
+
+
 def _grader_owned(path: str, task: Task) -> bool:
-    return is_test_path(path) or PurePosixPath(path).name in PYTEST_CONFIG_FILES or path in task.test_files
+    p = PurePosixPath(path)
+    if is_test_path(path) or p.name in PYTEST_CONFIG_FILES or path in task.test_files:
+        return True
+    # node_modules is where the test runner itself lives. The env keeps it outside the repo, but
+    # a patch can still write a folder by that name and Node would find it first.
+    return "node_modules" in p.parts or bool(_JS_CONFIG.match(p.name))
 
 
 def strip_test_changes(patch: str, task: Task) -> tuple[str, list[str]]:

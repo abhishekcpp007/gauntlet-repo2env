@@ -50,6 +50,23 @@ class EnvSpec(BaseModel):
         return cls.model_validate(json.loads(Path(path).read_text()))
 
 
+def check_supported(slug: str, stack: Stack) -> None:
+    """Raise UnsupportedRepo unless this is a stack an env can be built for."""
+    if stack.language == "python":
+        return
+    if stack.language == "node":
+        if stack.unsupported:
+            raise UnsupportedRepo(f"{slug} is a node project, but {stack.unsupported}")
+        return
+    raise UnsupportedRepo(f"{slug} looks like a {stack.language} project, only Python and Node are handled")
+
+
+def base_image_for(stack: Stack, python: str = "3.12") -> str:
+    if stack.language == "node":
+        return f"node:{stack.node or '22'}-slim"
+    return f"python:{python}-slim"
+
+
 def _image_name(slug: str) -> str:
     return f"{ENV_REPO}/" + re.sub(r"[^a-z0-9._-]+", "-", slug.lower()).strip("-.")
 
@@ -71,11 +88,10 @@ def build_env(
     repo = clone(url, cache_dir)
     sha = resolve(repo, ref)
     stack = detect(repo, sha)
-    if stack.language != "python":
-        raise UnsupportedRepo(f"{repo.slug} looks like a {stack.language} project, v0.1 only handles Python")
+    check_supported(repo.slug, stack)
 
     script = install_script(stack)
-    base_image = f"python:{python}-slim"
+    base_image = base_image_for(stack, python)
     cfg = SandboxConfig(
         image=base_image,
         network=True,  # only during the build, task sandboxes run offline
@@ -99,21 +115,21 @@ def build_env(
         log(f"copying {repo.slug} @ {sha[:12]}")
         sb.put_archive(WORKDIR, archive(repo, sha))
 
-        log("installing python deps")
+        log(f"installing {stack.language} deps")
         res = sb.exec(script, workdir=WORKDIR)
         if not res.ok:
             raise BuildFailed(f"dependency install failed:\n{(res.stdout + res.stderr)[-3000:]}")
 
         if baseline_tests:
             log("running the test suite once for a baseline")
-            baseline = run_tests(sb, WORKDIR, timeout=test_timeout)
+            baseline = run_tests(sb, WORKDIR, timeout=test_timeout, runner=stack.runner)
             log(f"baseline: {baseline.summary()}")
         else:
             baseline = TestReport()
 
         # leave nothing behind that a later task sandbox could learn from: grader scratch
-        # files, pip and apt caches
-        sb.exec("rm -rf /tmp/gauntlet-* /root/.cache /var/lib/apt/lists/*")
+        # files, pip, npm and apt caches
+        sb.exec("rm -rf /tmp/gauntlet-* /root/.cache /root/.npm /var/lib/apt/lists/*")
 
         snap = sb.snapshot(label="env")
         image = sb.client.images.get(snap)
