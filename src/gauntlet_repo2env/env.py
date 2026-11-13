@@ -34,6 +34,13 @@ PACKAGE_CACHES = (
 )
 
 
+# Install output goes to a file, since exec keeps the head of what it captures and a failed
+# install puts its reason at the very end. The /tmp/gauntlet- prefix gets it swept before the
+# snapshot.
+INSTALL_LOG = "/tmp/gauntlet-install.log"
+FAILURE_TAIL_BYTES = 3000
+
+
 class UnsupportedRepo(Repo2EnvError):
     pass
 
@@ -129,9 +136,10 @@ def build_env(
         sb.put_archive(WORKDIR, archive(repo, sha))
 
         log(f"installing {stack.language} deps")
-        res = sb.exec(script, workdir=WORKDIR)
+        res = sb.exec(f"( {script}\n) > {INSTALL_LOG} 2>&1", workdir=WORKDIR)
         if not res.ok:
-            raise BuildFailed(f"dependency install failed:\n{(res.stdout + res.stderr)[-3000:]}")
+            tail = sb.exec(f"tail -c {FAILURE_TAIL_BYTES} {INSTALL_LOG}").stdout
+            raise BuildFailed(f"dependency install failed:\n{tail}")
 
         if baseline_tests:
             log("running the test suite once for a baseline")

@@ -4,7 +4,7 @@ import docker
 import pytest
 
 from gauntlet_repo2env import build_env, evaluate, extract_patch, mine_tasks, open_task
-from gauntlet_repo2env.env import UnsupportedRepo
+from gauntlet_repo2env.env import BuildFailed, UnsupportedRepo
 
 from .conftest import _commit, _git
 
@@ -124,6 +124,34 @@ def test_non_python_repo_is_refused(tmp_path):
     _git(repo, "init", "-q")
     _commit(repo, "init", {"package.json": "{}"})
     with pytest.raises(UnsupportedRepo, match="node"):
+        build_env(str(repo), cache_dir=tmp_path / "cache")
+
+
+LOUD_FAILING_SETUP = """\
+import sys
+
+sys.stderr.write("compiling a lot of things\\n" * 20000)
+sys.exit("the actual reason the build broke")
+"""
+
+
+SETUPTOOLS_PYPROJECT = '[build-system]\nrequires = ["setuptools"]\nbuild-backend = "setuptools.build_meta"\n'
+
+
+def test_a_failed_install_reports_its_last_words_past_the_output_cap(tmp_path):
+    repo = tmp_path / "loud"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    _commit(
+        repo,
+        "init",
+        {
+            "pyproject.toml": SETUPTOOLS_PYPROJECT,
+            "setup.py": LOUD_FAILING_SETUP,
+            "loud/__init__.py": "",
+        },
+    )
+    with pytest.raises(BuildFailed, match="the actual reason the build broke"):
         build_env(str(repo), cache_dir=tmp_path / "cache")
 
 
