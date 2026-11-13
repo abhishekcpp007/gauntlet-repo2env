@@ -102,8 +102,11 @@ def test_node_major(spec, major):
     [
         ({"package.json": _package(workspaces=["packages/*"])}, "workspace"),
         ({"pnpm-workspace.yaml": "packages:\n  - 'packages/*'\n"}, "workspace"),
-        ({"package.json": _package(devDependencies={"jest": "^29"})}, "jest"),
         ({"package.json": _package(devDependencies={"mocha": "^10"})}, "no supported test runner"),
+        (
+            {"package.json": _package(devDependencies={"jest": "^29", "jest-runner-eslint": "^2"})},
+            "another runner",
+        ),
         ({"bun.lockb": "x"}, "bun"),
     ],
 )
@@ -246,3 +249,73 @@ def test_runner_config_files_are_named():
 
     assert all(is_js_runner_config(p) for p in ("vitest.config.ts", "sub/vite.config.mjs", "vitest.setup.js"))
     assert not any(is_js_runner_config(p) for p in ("package.json", "src/config.ts", "tsconfig.json"))
+
+
+JEST_TEST = CALC_TEST.replace("import { describe, expect, it } from 'vitest'\n", "")
+
+
+def test_jest_is_a_runner_too(tmp_path):
+    stack = _stack(tmp_path, {"package.json": _package(devDependencies={"jest": "^29.7.0"})})
+    assert (stack.language, stack.runner) == ("node", "jest")
+    assert stack.unsupported is None and stack.installable
+
+
+def test_vitest_wins_when_a_repo_has_both(tmp_path):
+    both = _package(devDependencies={"jest": "^29.7.0", "vitest": "^3.2.0"})
+    assert _stack(tmp_path, {"package.json": both}).runner == "vitest"
+
+
+def test_the_jest_command_does_not_go_through_the_repo():
+    cmd = suite_command("jest", "/tmp/j.json", ["test/calc.test.js"])
+    assert "npm" not in cmd and "npx" not in cmd
+    assert "node ../node_modules/jest/bin/jest.js --ci --json --outputFile=/tmp/j.json" in cmd
+    assert cmd.endswith("--runTestsByPath test/calc.test.js")
+    assert "--runTestsByPath" not in suite_command("jest", "/tmp/j.json", [])
+    # luxon: the flag breaks a repo that compiles its ES modules to CommonJS, so the repo decides
+    assert "grep -q experimental-vm-modules package.json" in cmd
+
+
+def test_a_jest_report_reads_like_a_vitest_one():
+    from gauntlet_repo2env import parse_report
+
+    report = {
+        "testResults": [
+            {
+                "name": "/workspace/repo/test/calc.test.js",
+                "status": "failed",
+                "assertionResults": [
+                    {"ancestorTitles": [], "title": "exports a function", "status": "passed"},
+                    {"ancestorTitles": ["calc", "div"], "title": "divides exactly", "status": "failed"},
+                    {"ancestorTitles": ["calc"], "title": "has a version", "status": "pending"},
+                    {"ancestorTitles": ["calc"], "title": "later", "status": "todo"},
+                ],
+            },
+            # a file that could not load reports no tests at all
+            {"name": "/workspace/repo/test/mul.test.js", "status": "failed", "assertionResults": []},
+        ]
+    }
+    assert parse_report(json.dumps(report), "/workspace/repo") == {
+        "test/calc.test.js::exports a function": "passed",
+        "test/calc.test.js::calc > div > divides exactly": "failed",
+        "test/calc.test.js::calc > has a version": "skipped",
+        "test/calc.test.js::calc > later": "skipped",
+        "test/mul.test.js::test/mul.test.js": "failed",
+    }
+
+
+def test_junit_xml_still_goes_to_the_junit_parser():
+    from gauntlet_repo2env import parse_report
+
+    xml = '<testsuite><testcase classname="tests.test_a" name="test_x" file="tests/test_a.py"/></testsuite>'
+    assert parse_report(xml) == {"tests/test_a.py::test_x": "passed"}
+
+
+@pytest.mark.docker
+def test_build_a_jest_env_and_run_its_suite(tmp_path):
+    esm = {"test": "NODE_OPTIONS=--experimental-vm-modules jest"}  # what an ESM repo's own script says
+    package = _package(devDependencies={"jest": "^29.7.0"}, scripts=esm)
+    files = {"package.json": package, "test/calc.test.js": JEST_TEST}
+    spec = build_env(str(make_js_repo(tmp_path, files)), cache_dir=tmp_path / "cache")
+    assert spec.stack.runner == "jest"
+    assert spec.baseline.passed == ["test/calc.test.js::calc > adds two numbers"]
+    assert not spec.baseline.failed and not spec.baseline.errors

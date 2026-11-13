@@ -261,10 +261,16 @@ def _detect_node(repo: Repo, sha: str, files: list[str], root: set[str]) -> Stac
         stack.unsupported = "it is a workspace (monorepo), only single-package repos are handled"
     elif {"bun.lockb", "bun.lock"} & root and not stack.lockfile:
         stack.unsupported = "it is locked with bun, only npm, pnpm and yarn are handled"
-    elif stack.runner == "jest":
-        stack.unsupported = "its tests run on jest, only vitest is handled so far"
-    elif stack.runner != "vitest":
-        stack.unsupported = "no supported test runner in package.json (looked for vitest)"
+    elif stack.runner == "jest" and (extra := sorted(d for d in deps if d.startswith("jest-runner-"))):
+        # eslint-plugin-jest runs ESLint through jest-runner-eslint, so every file reports a
+        # test called "ESLint". Lint then counts as a regression test, and the canary the
+        # grader plants in a test file is itself a lint failure: the real fix for #2039 passed
+        # all 8 of its target tests and still didn't resolve.
+        stack.unsupported = (
+            f"its jest config adds another runner ({extra[0]}), so non-test results get graded"
+        )
+    elif stack.runner not in ("vitest", "jest"):
+        stack.unsupported = "no supported test runner in package.json (looked for vitest and jest)"
     stack.installable = stack.unsupported is None
     return stack
 

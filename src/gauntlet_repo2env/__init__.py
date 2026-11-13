@@ -17,7 +17,7 @@ from .tasks import (
     split_patch,
     strip_test_changes,
 )
-from .testrun import TestReport, parse_junit, run_tests, suite_command
+from .testrun import TestReport, parse_jest_json, parse_junit, parse_report, run_tests, suite_command
 
 __all__ = [
     "BuildFailed",
@@ -41,7 +41,9 @@ __all__ = [
     "load_tasks",
     "mine_tasks",
     "open_task",
+    "parse_jest_json",
     "parse_junit",
+    "parse_report",
     "run_tests",
     "save_tasks",
     "split_patch",

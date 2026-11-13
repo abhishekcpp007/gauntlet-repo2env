@@ -1,7 +1,9 @@
-"""Run a repo's tests inside a sandbox and turn the JUnit XML into per-test results."""
+"""Run a repo's tests inside a sandbox and turn the runner's report into per-test results."""
 
 from __future__ import annotations
 
+import json
+import posixpath
 import shlex
 import xml.etree.ElementTree as ET
 from pathlib import PurePosixPath
@@ -77,11 +79,46 @@ def parse_junit(xml_text: str) -> dict[str, str]:
     return results
 
 
-RUNNERS = ("pytest", "vitest")
+_JEST_STATUS = {"passed": "passed", "failed": "failed"}  # pending, skipped, todo, disabled: skipped
+
+
+def parse_jest_json(text: str, root: str | None = None) -> dict[str, str]:
+    """The same map from jest's own `--json` report.
+
+    jest has no JUnit reporter built in, and `jest-junit` is a package most repos don't have.
+    The JSON report is always there. Ids come out in the shape vitest's do,
+    `path::outer describe > inner describe > title`, so one parser of test files serves both.
+    jest names files by absolute path, and `root` (the repo folder) is cut off the front.
+    """
+    results: dict[str, str] = {}
+    data = json.loads(text)
+    for suite in data.get("testResults") or []:
+        file = str(suite.get("name") or "?")
+        if root and file.startswith(root.rstrip("/") + "/"):
+            file = posixpath.relpath(file, root)
+        cases = suite.get("assertionResults") or []
+        if not cases and suite.get("status") == "failed":
+            # the file didn't load, or isn't there: one failed entry under the file's own name,
+            # which is how vitest reports it too
+            results[f"{file}::{file}"] = "failed"
+        for case in cases:
+            name = " > ".join([*(case.get("ancestorTitles") or []), str(case.get("title", "?"))])
+            results[f"{file}::{name}"] = _JEST_STATUS.get(case.get("status"), "skipped")
+    return results
+
+
+def parse_report(text: str, root: str | None = None) -> dict[str, str]:
+    """Per-test results from whatever the runner wrote: JUnit XML, or jest's JSON."""
+    if text.lstrip().startswith("{"):
+        return parse_jest_json(text, root)
+    return parse_junit(text)
+
+
+RUNNERS = ("pytest", "vitest", "jest")
 
 
 def suite_command(runner: str, junit_path: str, targets: list[str], *, keep_going: bool = False) -> str:
-    """The shell command that runs `targets` (or everything) and writes JUnit XML to `junit_path`.
+    """The shell command that runs `targets` (or everything) and writes its report to `junit_path`.
 
     One place, because the env build, task validation and grading all have to run a suite the
     same way or a test id stops meaning the same thing between them.
@@ -102,6 +139,21 @@ def suite_command(runner: str, junit_path: str, targets: list[str], *, keep_goin
             f"rm -f {junit_path}; CI=1 node ../node_modules/vitest/vitest.mjs run "
             f"--reporter=junit --outputFile={junit_path} {listing}"
         )
+    if runner == "jest":
+        # By path for the same reasons as vitest. `--ci` keeps a run from writing a snapshot
+        # that isn't there, so a missing one fails. `--runTestsByPath` takes the targets as
+        # files and not as patterns to search with.
+        #
+        # The vm-modules flag is only set when the repo's own scripts set it. It is not
+        # harmless: luxon is `"type": "module"` and has babel turn its files into CommonJS,
+        # and with the flag on jest loaded them as ES modules instead. All 58 of its test
+        # files failed with "Must use import to load ES Module".
+        by_path = f"--runTestsByPath {listing}" if targets else ""
+        esm = "$(grep -q experimental-vm-modules package.json 2>/dev/null && echo --experimental-vm-modules)"
+        return (
+            f'rm -f {junit_path}; CI=1 NODE_OPTIONS="{esm}" '
+            f"node ../node_modules/jest/bin/jest.js --ci --json --outputFile={junit_path} {by_path}"
+        ).rstrip()
     raise ValueError(f"no suite command for test runner {runner!r}")
 
 
@@ -124,6 +176,6 @@ def run_tests(
 
     buckets = {"passed": report.passed, "failed": report.failed, "error": report.errors}
     buckets["skipped"] = report.skipped
-    for test_id, status in sorted(parse_junit(xml_text).items()):
+    for test_id, status in sorted(parse_report(xml_text, workdir).items()):
         buckets[status].append(test_id)
     return report
